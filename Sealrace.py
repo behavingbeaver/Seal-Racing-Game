@@ -201,103 +201,136 @@ class GAME:
 
         return frame
 
+class RECORDER:
+    def __init__(self, board_number:int, display = True) -> None:
+        self.board_number = board_number
+        self.display = display
+        self.game = GAME(self.board_number)
+        self.game.initialize()
+        
+        self.game_frames = []
+        self.hits = []   # store frame on wich a seal hits a wall
+        self.fps = 30
+        self.intro_seconds = 5
+
+    def __display_frame(self, frame, frame_rate) -> None:
+        if not self.display: return
+        cv2.imshow("game", frame)
+        cv2.waitKey(frame_rate)
+
+    def StartingScreen(self) -> None:
+        # starting screen
+        starting_frame = self.game.render_next_frame()
+        # generete first frame to use as base
+        number_of_frames = self.fps*self.intro_seconds
+        self.n = 0
+        for self.n in range(0, number_of_frames):
+            # x position of the bounching screen (20 to offset for the negative distance in the rectagle drawing)
+            x = round(20 + self.game.size[0] * self.n / number_of_frames)
+            # if the x coordinate is grater than the window (340 adjust for the width of the text) than subract from the end (-1= last position, etc.)
+            # (game.size[0] - 680) is a correcting factor to the bounce idk where it stems from but it's linear
+            x = self.game.size[0] - x + (self.game.size[0] - 680) if x + 340 > self.game.size[0] else x
+
+            # x position of the bounching screen (35 to offset for the negative distance in the rectagle drawing)
+            y = round(35 + self.game.size[1] * self.n / number_of_frames)
+            # if the y coordinate is grater than the window (35 adjust for the height of the text) than subract from the end (-1= last position, etc.)
+            # game.size[1] is multiplied by 2 cause negative values are seen as negative coordinates and not negative indexes (so 1 to "normalise" the counter and the second to get the actual position)
+            y = 2 * self.game.size[1] - y - 35 if y + 20 > self.game.size[1] else y
+
+            # draw red rectangle and than the text on top
+            frame = cv2.rectangle(starting_frame.copy(), (x - 20, y + 20), (x + 340, y - 35), (0,0,255), -1)
+            # '%.2f' %  keeps the last 0
+            frame = cv2.putText(frame, f"Place your bets in: {'%.2f' % round(self.intro_seconds - self.n/30, 2)}s", (x, y), cv2.FONT_HERSHEY_COMPLEX, 0.75, (255,255,255), 2)
+
+            self.game_frames.append(frame.copy()[:,:,:3])
+
+            self.__display_frame(frame, 1000//30)
+
+    def GameScreen(self) -> None:
+        while True:
+            frame = self.game.render_next_frame()
+            if type(frame) == int:
+                self.EndScreen()
+                break
+            else:
+                self.game_frames.append(frame.copy()[:,:,:3])
+                if self.game.hit_wall:
+                    self.hits.append(self.n)
+                    self.game.hit_wall = False
+                self.n += 1
+                # live view 3x speed
+                self.__display_frame(frame, 1000//120)
+
+    def EndScreen(self) -> None:
+        # pre compute static parts of the ending screen to speed up the calculation of the frame
+        frame = self.game._background
+        frame = cv2.putText(frame, self.game.winner, (400,250), cv2.FONT_HERSHEY_COMPLEX, 1, (0,0,0), 4)
+        frame = overlay_images(frame, self.game._sprites["winning"][self.game.winner], (400, 350))
+        # credits
+        frame = cv2.putText(frame, "board by @" + self.game._author, (0, self.game.size[1]-70), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
+        frame = cv2.putText(frame, "game by @behavingbeaver", (0, self.game.size[1]-45), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
+        frame = cv2.putText(frame, "sprites work by @Leptonychotes", (0, self.game.size[1]-20), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
+
+        # make the text THE WINNER IS rainbow color it: times the rainbow is runned throw, c: color of the rainbow
+        for it in range(0, 5):
+            for c in range (0, 30):
+                frame = cv2.putText(frame, "THE WINNER IS", (300,200), cv2.FONT_HERSHEY_COMPLEX, 1, numpy.array(colorsys.hsv_to_rgb(c / 30, 1, 1)[::-1]) * 255, 4)
+                self.game_frames.append(frame.copy()[:,:,:3])
+                self.__display_frame(frame, 1000//30)
+                self.n += 1
+    
+    def SaveRecording(self) -> None:
+        # create silent audio track as long as the intro + race + ending screeing (n is the counter)
+        os.system(f"ffmpeg -hide_banner -loglevel error -f lavfi -i anullsrc=r=11025:cl=mono -t {self.n // self.fps} -acodec aac {sys.path[0]}/base.wav")
+
+        # start of the ffmpeg filter
+        # command example: ffmpeg -i base.wav -i sound_effect.wav -filter_complex "[1]adelay=100[b];[1]adelay=100[c];[0][b][c]amix=3" test.wav
+        print("[DEBUG] creating audio track")
+        command = f'ffmpeg -hide_banner -loglevel error -i {sys.path[0]}/base.wav -i {sys.path[0]}/sound_effect.wav -filter_complex "'
+
+        names = ["0"]   # keep track of name generated
+
+        print("[DEBUG] creating ffmpeg command")
+        for h in self.hits:
+            i = self.hits.index(h) + 1
+            names.append("".join([chr((ord('a')+i % 26 if not _ else ord('`')+_)) for _ in range(i // 26, -1, -1)]))    # generate letters from numbers: 1->a, 26->z, 27->aa, ecc
+            command += f"[1]adelay={round((h/self.fps)*1000)}[{names[-1]}];"
+
+        command += "[" + "][".join(names) + f']amix={len(names)}" {sys.path[0]}/audio.wav'
+
+        print("[DEBUG] running ffmpeg command")
+        os.system(command)
+        os.remove(f"{sys.path[0]}/base.wav")    # remove background sound
+
+        print("[DEBUG] creating video")
+        # save frames to video called game.mp44 with mp4v codec
+        out = cv2.VideoWriter(f"{sys.path[0]}/game.mp4", cv2.VideoWriter_fourcc(*'mp4v'), self.fps, self.game.size)
+        for frame in self.game_frames: out.write(frame)
+        out.release()
+        # use ffmpeg to convert video from mp4v codec (not supported by twitter) to h.264 (supported) and delete the incorrect codec video
+        print("[DEBUG] converting video")
+        os.system(f"ffmpeg -hide_banner -loglevel error -i {sys.path[0]}/game.mp4 -an -vcodec libx264 -crf 23 {sys.path[0]}/game_tmp.mp4")
+        os.remove(f"{sys.path[0]}/game.mp4")
+        # add audio to video and remove both of them
+        print("[DEBUG] merging video and audio")
+        os.system(f"ffmpeg -hide_banner -loglevel error -i {sys.path[0]}/game_tmp.mp4 -i {sys.path[0]}/audio.wav -c:v copy -c:a aac {sys.path[0]}/game_{datetime.today().strftime('%Y-%m-%d-%H-%M-%S')}_board{board_number}.mp4")
+        os.remove(f"{sys.path[0]}/game_tmp.mp4")
+        os.remove(f"{sys.path[0]}/audio.wav")
+
+    def PLAY(self) -> None:
+        self.StartingScreen()
+        self.GameScreen()
+        self.SaveRecording()
+
 if __name__ == "__main__":
     board_number = sys.argv[1] if len(sys.argv) > 1 else input("Board number: ")
-
-    game = GAME(board_number)
-    game.initialize()
-
-    game_frames = []
-    hits = []   # store frame on wich a seal hits a wall
-    fps = 30
-    intro_seconds = 5
-
-    # starting screen
-    starting_frame = game.render_next_frame()
-    # generete first frame to use as base
-    number_of_frames = fps*intro_seconds
-    for n in range(0, number_of_frames):
-        # x position of the bounching screen (20 to offset for the negative distance in the rectagle drawing)
-        x = round(20 + game.size[0] * n / number_of_frames)
-        # if the x coordinate is grater than the window (340 adjust for the width of the text) than subract from the end (-1= last position, etc.)
-        # (game.size[0] - 680) is a correcting factor to the bounce idk where it stems from but it's linear
-        x = game.size[0] - x + (game.size[0] - 680) if x + 340 > game.size[0] else x
-
-        # x position of the bounching screen (35 to offset for the negative distance in the rectagle drawing)
-        y = round(35 + game.size[1] * n / number_of_frames)
-        # if the y coordinate is grater than the window (35 adjust for the height of the text) than subract from the end (-1= last position, etc.)
-        # game.size[1] is multiplied by 2 cause negative values are seen as negative coordinates and not negative indexes (so 1 to "normalise" the counter and the second to get the actual position)
-        y = 2 * game.size[1] - y - 35 if y + 20 > game.size[1] else y
-
-        # draw red rectangle and than the text on top
-        frame = cv2.rectangle(starting_frame.copy(), (x - 20, y + 20), (x + 340, y - 35), (0,0,255), -1)
-        # '%.2f' %  keeps the last 0
-        frame = cv2.putText(frame, f"Place your bets in: {'%.2f' % round(intro_seconds - n/30, 2)}s", (x, y), cv2.FONT_HERSHEY_COMPLEX, 0.75, (255,255,255), 2)
-
-        game_frames.append(frame.copy()[:,:,:3])
-
-        cv2.imshow("game", frame)
-        cv2.waitKey(1000//30)
-
     while True:
-        frame = game.render_next_frame()
-        if type(frame) == int:
-            # pre compute static parts of the ending screen to speed up the calculation of the frame
-            frame = game._background
-            frame = cv2.putText(frame, game.winner, (400,250), cv2.FONT_HERSHEY_COMPLEX, 1, (0,0,0), 4)
-            frame = overlay_images(frame, game._sprites["winning"][game.winner], (400, 350))
-            # credits
-            frame = cv2.putText(frame, "board by @" + game._author, (0, game.size[1]-70), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
-            frame = cv2.putText(frame, "game by @behavingbeaver", (0, game.size[1]-45), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
-            frame = cv2.putText(frame, "sprites work by @Leptonychotes", (0, game.size[1]-20), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
-
-            # make the text THE WINNER IS rainbow color it: times the rainbow is runned throw, c: color of the rainbow
-            for it in range(0, 5):
-                for c in range (0, 30):
-                    frame = cv2.putText(frame, "THE WINNER IS", (300,200), cv2.FONT_HERSHEY_COMPLEX, 1, numpy.array(colorsys.hsv_to_rgb(c / 30, 1, 1)[::-1]) * 255, 4)
-                    game_frames.append(frame.copy()[:,:,:3])
-                    cv2.imshow("game", frame)
-                    cv2.waitKey(1000//30)
-                    n += 1
+        print("RUNNING")
+        rec = RECORDER(board_number, display=False)
+        rec.StartingScreen()
+        rec.GameScreen()
+        print("game winner", rec.game.winner)
+        if rec.game.winner == "NIK":
+            rec.SaveRecording()
             break
-        else:
-            game_frames.append(frame.copy()[:,:,:3])
-            if game.hit_wall:
-                hits.append(n)
-                game.hit_wall = False
-            n += 1
-            # live view 3x speed
-            cv2.imshow("game", frame)
-            cv2.waitKey(1000//120)
-
-    # create silent audio track as long as the intro + race + ending screeing (n is the counter)
-    os.system(f"ffmpeg -hide_banner -loglevel error -f lavfi -i anullsrc=r=11025:cl=mono -t {n // fps} -acodec aac {sys.path[0]}/tmp.wav")
-
-    # start of the ffmpeg filter
-    # command example: ffmpeg -i base.wav -i sound_effect.wav -filter_complex "[1]adelay=100[b];[1]adelay=100[c];[0][b][c]amix=3" test.wav
-    command = f'ffmpeg -i {sys.path[0]}/base.wav -i {sys.path[0]}/sound_effect.wav -filter_complex "'
-
-    names = ["0"]   # keep track of name generated
-
-    for h in hits:
-        i = hits.index(h) + 1
-        names.append("".join([chr((ord('a')+i % 26 if not _ else ord('`')+_)) for _ in range(i // 26, -1, -1)]))    # generate letters from numbers: 1->a, 26->z, 27->aa, ecc
-        command += f"[1]adelay={round((h/fps)*1000)}[{names[-1]}];"
-
-    command += "[" + "][".join(names) + f']amix={len(names)}" {sys.path[0]}/audio.wav'
-
-    os.system(command)
-    os.remove(f"{sys.path[0]}/base.wav")    # remove background sound
-
-    # save frames to video called game.mp44 with mp4v codec
-    out = cv2.VideoWriter(f"{sys.path[0]}/game.mp4", cv2.VideoWriter_fourcc(*'mp4v'), fps, game.size)
-    for frame in game_frames: out.write(frame)
-    out.release()
-    # use ffmpeg to convert video from mp4v codec (not supported by twitter) to h.264 (supported) and delete the incorrect codec video
-    os.system(f"ffmpeg -i {sys.path[0]}/game.mp4 -an -vcodec libx264 -crf 23 {sys.path[0]}/game_tmp.mp4")
-    os.remove(f"{sys.path[0]}/game.mp4")
-    # add audio to video and remove both of them
-    os.system(f"ffmpeg -i {sys.path[0]}/game_tmp.mp4 -i {sys.path[0]}/audio.wav -c:v copy -c:a aac {sys.path[0]}/game_{datetime.today().strftime('%Y-%m-%d-%H-%M-%S')}_board{board_number}.mp4")
-    os.remove(f"{sys.path[0]}/game_tmp.mp4")
-    os.remove(f"{sys.path[0]}/audio.wav")
     
