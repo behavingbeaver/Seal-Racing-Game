@@ -62,6 +62,8 @@ class GAME:
         self._sprites["gaming"] = {_.split(".")[0]: cv2.imread(f"{sys.path[0]}/Sprites/Gaming/" + _, cv2.IMREAD_UNCHANGED) for _ in os.listdir(f"{sys.path[0]}/Sprites/Gaming/")}
         self._sprites["winning"] = {_.split(".")[0]: cv2.imread(f"{sys.path[0]}/Sprites/Winner/" + _, cv2.IMREAD_UNCHANGED) for _ in os.listdir(f"{sys.path[0]}/Sprites/Winner/")}
 
+        self.hit_wall = False   # used to store frame on which seal hits the walls
+
         self.size = (800, 800)   # x, y : w, h
         self._SPAWING_AREA = [60, 60]
         #self.__obstacle_color = [133, 71, 8]   # brown
@@ -184,6 +186,8 @@ class GAME:
             elif sud == max_dir: angle = numpy.deg2rad(random.randint(210, 335))
             elif est == max_dir: angle = numpy.deg2rad(random.randint(120, 245))
             elif west == max_dir: angle = numpy.deg2rad(180 - random.randint(120, 245))
+            
+            if angle != -1: self.hit_wall = True
 
             seal.change_direction(angle)
 
@@ -204,6 +208,7 @@ if __name__ == "__main__":
     game.initialize()
 
     game_frames = []
+    hits = []   # store frame on wich a seal hits a wall
     fps = 30
     intro_seconds = 5
 
@@ -253,17 +258,46 @@ if __name__ == "__main__":
                     game_frames.append(frame.copy()[:,:,:3])
                     cv2.imshow("game", frame)
                     cv2.waitKey(1000//30)
+                    n += 1
             break
         else:
             game_frames.append(frame.copy()[:,:,:3])
+            if game.hit_wall:
+                hits.append(n)
+                game.hit_wall = False
+            n += 1
             # live view 3x speed
             cv2.imshow("game", frame)
             cv2.waitKey(1000//120)
+
+    # create silent audio track as long as the intro + race + ending screeing (n is the counter)
+    os.system(f"ffmpeg -hide_banner -loglevel error -f lavfi -i anullsrc=r=11025:cl=mono -t {n // fps} -acodec aac {sys.path[0]}/tmp.wav")
+
+    # start of the ffmpeg filter
+    # command example: ffmpeg -i base.wav -i sound_effect.wav -filter_complex "[1]adelay=100[b];[1]adelay=100[c];[0][b][c]amix=3" test.wav
+    command = f'ffmpeg -i {sys.path[0]}/base.wav -i {sys.path[0]}/sound_effect.wav -filter_complex "'
+
+    names = ["0"]   # keep track of name generated
+
+    for h in hits:
+        i = hits.index(h) + 1
+        names.append("".join([chr((ord('a')+i % 26 if not _ else ord('`')+_)) for _ in range(i // 26, -1, -1)]))    # generate letters from numbers: 1->a, 26->z, 27->aa, ecc
+        command += f"[1]adelay={round((h/fps)*1000)}[{names[-1]}];"
+
+    command += "[" + "][".join(names) + f']amix={len(names)}" {sys.path[0]}/audio.wav'
+
+    os.system(command)
+    os.remove(f"{sys.path[0]}/base.wav")    # remove background sound
 
     # save frames to video called game.mp44 with mp4v codec
     out = cv2.VideoWriter(f"{sys.path[0]}/game.mp4", cv2.VideoWriter_fourcc(*'mp4v'), fps, game.size)
     for frame in game_frames: out.write(frame)
     out.release()
     # use ffmpeg to convert video from mp4v codec (not supported by twitter) to h.264 (supported) and delete the incorrect codec video
-    os.system(f"ffmpeg -i {sys.path[0]}/game.mp4 -an -vcodec libx264 -crf 23 {sys.path[0]}/game_{datetime.today().strftime('%Y-%m-%d-%H-%M-%S')}_board{board_number}.mp4")
+    os.system(f"ffmpeg -i {sys.path[0]}/game.mp4 -an -vcodec libx264 -crf 23 {sys.path[0]}/game_tmp.mp4")
     os.remove(f"{sys.path[0]}/game.mp4")
+    # add audio to video and remove both of them
+    os.system(f"ffmpeg -i {sys.path[0]}/game_tmp.mp4 -i {sys.path[0]}/audio.wav -c:v copy -c:a aac {sys.path[0]}/game_{datetime.today().strftime('%Y-%m-%d-%H-%M-%S')}_board{board_number}.mp4")
+    os.remove(f"{sys.path[0]}/game_tmp.mp4")
+    os.remove(f"{sys.path[0]}/audio.wav")
+    
