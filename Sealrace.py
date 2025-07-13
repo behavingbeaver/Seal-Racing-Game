@@ -66,8 +66,8 @@ class GAME:
         self._SPAWING_AREA = [60, 60]
         #self.__obstacle_color = [133, 71, 8]   # brown
         self.__obstacle_color = [100, 100, 100]
-        self._START = (0, 0)
-        self._END = (0, 0)
+        self._START = (-1, -1)
+        self._END = (-1, -1)
 
         self.board : typing.List[int] = list()
         self._seals : typing.List[SEAL] = list()    # define type to help with vscode code suggestion
@@ -76,7 +76,7 @@ class GAME:
         # nameing convention: board{index}_{author}.png
         name = [_ for _ in os.listdir(f"{sys.path[0]}/Boards/") if f"board{index}" in _][0] # the programs doesn't know the author so it has to search for the correct index
         self._author = name.split("_")[-1].split(".")[0]
-        
+
         pic = cv2.imread(f"{sys.path[0]}/Boards/{name}")    # load image
         self.size = pic.shape[:-1][::-1]   # set size of rendered frame
         # create a 2d list rappresenting the status of the board
@@ -95,6 +95,8 @@ class GAME:
                 else: self.board[-1].append(0)
         # convert the board to a numpy array for easier and faster area look up
         self.board = numpy.array(self.board)
+        if self._START == (-1, -1): raise ValueError("Starting point not detected")
+        if self._END == (-1, -1): raise ValueError("Ending point not detected")
 
     def __CreateBoundries(self) -> numpy.ndarray:
         for y in range(0, len(self.board)):
@@ -122,7 +124,7 @@ class GAME:
             while True:
                 rand_x = random.randint(self._START[0] - self._SPAWING_AREA[0], self._START[0] + self._SPAWING_AREA[0])
                 rand_y = random.randint(self._START[1] - self._SPAWING_AREA[1], self._START[1] + self._SPAWING_AREA[1])
-                
+
                 if rand_x < x or rand_y < y: continue
                 if rand_x + x > self.size[0] or rand_y + y > self.size[1]: continue
 
@@ -143,11 +145,11 @@ class GAME:
         mask = self._obstacles[..., 3] != 0     # create obstacles mask
         frame[mask] = self._obstacles[mask]     # replace all pixels in the mask with the obstacle
 
-        frame = overlay_images(frame, self._sprites["gaming"]["END"], (self._END[0] , self._END[1] ))
+        frame = overlay_images(frame, self._sprites["gaming"]["END"], (self._END[0] , self._END[1]))
 
         ## end scene drawing
         ## start seals update
-        
+
         self.board = numpy.where(self.board > 1, 0, self.board) # clear board from prev. frame seal shadow
         for seal in self._seals:
             seal.update_position()
@@ -160,12 +162,12 @@ class GAME:
             # draw seal bounding box DEBUG ONLY
             ## frame = cv2.rectangle(frame, (seal.bounding_box[0][0] , seal.bounding_box[0][1]),
             ##                              (seal.bounding_box[1][0] - 1, seal.bounding_box[1][1] - 1), (0, 255, 0), 1)
-            
+
             # check if the end point is inside the bounding box
             if seal.bounding_box[0][0] < self._END[0] < seal.bounding_box[1][0] and seal.bounding_box[0][1] < self._END[1] < seal.bounding_box[1][1]:
                 self.winner = seal._name
                 return -1
-            
+
             angle = -1
             # calculate the ammount of area (normalised) that is in contact with a wall or another seal
             north = numpy.sum(self.board[seal.bounding_box[0][1] - 1, seal.bounding_box[0][0]: seal.bounding_box[1][0]]) / (2*max(self.board[seal.bounding_box[0][1] - 1, seal.bounding_box[0][0]: seal.bounding_box[1][0]].shape) + 1) # +1 to avoid by 0 divisions
@@ -182,7 +184,7 @@ class GAME:
             elif sud == max_dir: angle = numpy.deg2rad(random.randint(210, 335))
             elif est == max_dir: angle = numpy.deg2rad(random.randint(120, 245))
             elif west == max_dir: angle = numpy.deg2rad(180 - random.randint(120, 245))
-            
+
             seal.change_direction(angle)
 
         ## end seals update
@@ -192,7 +194,7 @@ class GAME:
 
         ## end seals drawing
 
-        
+
         return frame
 
 if __name__ == "__main__":
@@ -202,6 +204,35 @@ if __name__ == "__main__":
     game.initialize()
 
     game_frames = []
+    fps = 30
+    intro_seconds = 5
+
+    # starting screen
+    starting_frame = game.render_next_frame()
+    # generete first frame to use as base
+    number_of_frames = fps*intro_seconds
+    for n in range(0, number_of_frames):
+        # x position of the bounching screen (20 to offset for the negative distance in the rectagle drawing)
+        x = round(20 + game.size[0] * n / number_of_frames)
+        # if the x coordinate is grater than the window (340 adjust for the width of the text) than subract from the end (-1= last position, etc.)
+        # (game.size[0] - 680) is a correcting factor to the bounce idk where it stems from but it's linear
+        x = game.size[0] - x + (game.size[0] - 680) if x + 340 > game.size[0] else x
+
+        # x position of the bounching screen (35 to offset for the negative distance in the rectagle drawing)
+        y = round(35 + game.size[1] * n / number_of_frames)
+        # if the y coordinate is grater than the window (35 adjust for the height of the text) than subract from the end (-1= last position, etc.)
+        # game.size[1] is multiplied by 2 cause negative values are seen as negative coordinates and not negative indexes (so 1 to "normalise" the counter and the second to get the actual position)
+        y = 2 * game.size[1] - y - 35 if y + 20 > game.size[1] else y
+
+        # draw red rectangle and than the text on top
+        frame = cv2.rectangle(starting_frame.copy(), (x - 20, y + 20), (x + 340, y - 35), (0,0,255), -1)
+        # '%.2f' %  keeps the last 0
+        frame = cv2.putText(frame, f"Place your bets in: {'%.2f' % round(intro_seconds - n/30, 2)}s", (x, y), cv2.FONT_HERSHEY_COMPLEX, 0.75, (255,255,255), 2)
+
+        game_frames.append(frame.copy()[:,:,:3])
+
+        cv2.imshow("game", frame)
+        cv2.waitKey(1000//30)
 
     while True:
         frame = game.render_next_frame()
@@ -214,12 +245,14 @@ if __name__ == "__main__":
             frame = cv2.putText(frame, "board by @" + game._author, (0, game.size[1]-70), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
             frame = cv2.putText(frame, "game by @behavingbeaver", (0, game.size[1]-45), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
             frame = cv2.putText(frame, "sprites work by @Leptonychotes", (0, game.size[1]-20), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
-            
+
             # make the text THE WINNER IS rainbow color it: times the rainbow is runned throw, c: color of the rainbow
             for it in range(0, 5):
                 for c in range (0, 30):
                     frame = cv2.putText(frame, "THE WINNER IS", (300,200), cv2.FONT_HERSHEY_COMPLEX, 1, numpy.array(colorsys.hsv_to_rgb(c / 30, 1, 1)[::-1]) * 255, 4)
                     game_frames.append(frame.copy()[:,:,:3])
+                    cv2.imshow("game", frame)
+                    cv2.waitKey(1000//30)
             break
         else:
             game_frames.append(frame.copy()[:,:,:3])
@@ -228,7 +261,7 @@ if __name__ == "__main__":
             cv2.waitKey(1000//120)
 
     # save frames to video called game.mp44 with mp4v codec
-    out = cv2.VideoWriter(f"{sys.path[0]}/game.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 30, game.size)
+    out = cv2.VideoWriter(f"{sys.path[0]}/game.mp4", cv2.VideoWriter_fourcc(*'mp4v'), fps, game.size)
     for frame in game_frames: out.write(frame)
     out.release()
     # use ffmpeg to convert video from mp4v codec (not supported by twitter) to h.264 (supported) and delete the incorrect codec video
