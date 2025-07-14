@@ -7,15 +7,12 @@ import typing
 from datetime import datetime
 import sys
 
-def overlay_images(bg:numpy.ndarray, img:numpy.ndarray, vertex:tuple[int, int]) -> numpy.ndarray:
+def overlay_images(bg:numpy.ndarray, img:numpy.ndarray, vertexes:tuple[tuple[int, int], tuple[int, int]]|tuple[int, int]) -> numpy.ndarray:
     # calculate bounding box
-    y1, y2 = vertex[1] - img.shape[0]//2, vertex[1] + img.shape[0]//2
-    x1, x2 = vertex[0] - img.shape[1]//2, vertex[0] + img.shape[1]//2
-
-    if x2 - x1 > img.shape[1]: x2 += 1
-    if x2 - x1 < img.shape[1]: x1 -= 1
-    if y2 - y1 > img.shape[0]: y2 += 1
-    if y2 - y1 < img.shape[0]: y1 -= 1
+    if type(vertexes[0]) == int:
+        y1, y2 = vertexes[1] - img.shape[0]//2, vertexes[1] + img.shape[0]//2
+        x1, x2 = vertexes[0] - img.shape[1]//2, vertexes[0] + img.shape[1]//2
+    else: x1, y1, x2, y2 = vertexes[0][0], vertexes[0][1], vertexes[1][0], vertexes[1][1]
 
     alpha_s = img[:, :, 3] / 255.0    # get alhpa channel
     alpha_l = 1.0 - alpha_s
@@ -26,26 +23,30 @@ def overlay_images(bg:numpy.ndarray, img:numpy.ndarray, vertex:tuple[int, int]) 
     return bg
 
 class SEAL:
-    def __init__(self, sprite:numpy.ndarray, x:int, y:int, velocity_module:int, velocity_phase:int, name:str) -> None:
+    def __init__(self, sprite:numpy.ndarray, x:int, y:int, velocity_module:int, velocity_phase:int, name:str, board_size:tuple[int, int]) -> None:
         self._name = name
         self._sprite = sprite
         self.x = x
         self.y = y
         self._module = velocity_module  # store the module so when the direction is changed floating point errors do not propagate while recomputing it with the eulerian distance
         self.velocity = numpy.array([velocity_module*numpy.cos(velocity_phase), velocity_module*numpy.sin(velocity_phase)])
-        self.bounding_box = [[self.x - sprite.shape[1] // 2, self.y - sprite.shape[0] // 2], [self.x + sprite.shape[1] // 2, self.y + sprite.shape[0] // 2]]
-        # stretch the bounding box to fit the shape (needed for odd sprite's dimensions)
-        if self.bounding_box[1][0] - self.bounding_box[0][0] > sprite.shape[1]: self.bounding_box[1][0] += 1
-        if self.bounding_box[1][0] - self.bounding_box[0][0] < sprite.shape[1]: self.bounding_box[0][0] -= 1
-        if self.bounding_box[1][1] - self.bounding_box[0][1] > sprite.shape[0]: self.bounding_box[1][1] += 1
-        if self.bounding_box[1][1] - self.bounding_box[0][1] < sprite.shape[0]: self.bounding_box[0][1] -= 1
+        self.update_bounding_box()
+        self.boundires = board_size
 
     def update_position(self) -> None:
         # double rounding is needed
         self.x = round(numpy.round(self.x + self.velocity[0]))
         self.y = round(numpy.round(self.y + self.velocity[1]))
         # recalculte the bouning box and fit it to the shape
+        self.update_bounding_box()
+        if self.bounding_box[0][0] < 0: self.x += abs(self.bounding_box[0][0])
+        if self.bounding_box[0][1] < 0: self.y += abs(self.bounding_box[0][1])
+        if self.bounding_box[1][0] >= self.boundires[0] - 1: self.x -= abs(self.bounding_box[1][0] - self.boundires[0]) + 2
+        if self.bounding_box[1][1] >= self.boundires[1] - 1: self.y -= abs(self.bounding_box[1][1] - self.boundires[1]) + 2
+        self.update_bounding_box()
+    def update_bounding_box(self) -> None:
         self.bounding_box = [[self.x - self._sprite.shape[1] // 2, self.y - self._sprite.shape[0] // 2], [self.x + self._sprite.shape[1] // 2, self.y + self._sprite.shape[0] // 2]]
+        # stretch the bounding box to fit the shape (needed for odd sprite's dimensions)
         if self.bounding_box[1][0] - self.bounding_box[0][0] > self._sprite.shape[1]: self.bounding_box[1][0] += 1
         if self.bounding_box[1][0] - self.bounding_box[0][0] < self._sprite.shape[1]: self.bounding_box[0][0] -= 1
         if self.bounding_box[1][1] - self.bounding_box[0][1] > self._sprite.shape[0]: self.bounding_box[1][1] += 1
@@ -134,7 +135,7 @@ class GAME:
             print("[DEBUG] spawned " + _)
             module = 5  # seal velocity
             angle = numpy.deg2rad(random.randint(0, 365))   # pull a random starting angle
-            self._seals.append(SEAL(self._sprites["gaming"][_], rand_x, rand_y, module, angle, _))
+            self._seals.append(SEAL(self._sprites["gaming"][_], rand_x, rand_y, module, angle, _, self.size))
             self.board[self._seals[-1].bounding_box[0][1] : self._seals[-1].bounding_box[1][1], self._seals[-1].bounding_box[0][0] : self._seals[-1].bounding_box[1][0]] = 2    # fill the area covered by the seal with 2s
 
     def render_next_frame(self) -> numpy.ndarray:
@@ -152,6 +153,7 @@ class GAME:
         ## end scene drawing
         ## start seals update
 
+        # cleaning board
         self.board = numpy.where(self.board > 1, 0, self.board) # clear board from prev. frame seal shadow
         for seal in self._seals:
             seal.update_position()
@@ -160,33 +162,40 @@ class GAME:
             tmp = numpy.where(tmp == 0, 2, tmp)
             self.board[seal.bounding_box[0][1] : seal.bounding_box[1][1], seal.bounding_box[0][0] : seal.bounding_box[1][0]] = tmp
 
+        # bouncing iteration
         for seal in self._seals:
             # draw seal bounding box DEBUG ONLY
             ## frame = cv2.rectangle(frame, (seal.bounding_box[0][0] , seal.bounding_box[0][1]),
             ##                              (seal.bounding_box[1][0] - 1, seal.bounding_box[1][1] - 1), (0, 255, 0), 1)
 
+            x1 = seal.bounding_box[0][0]
+            x2 = seal.bounding_box[1][0]
+            y1 = seal.bounding_box[0][1]
+            y2 = seal.bounding_box[1][1]
+
             # check if the end point is inside the bounding box
-            if seal.bounding_box[0][0] < self._END[0] < seal.bounding_box[1][0] and seal.bounding_box[0][1] < self._END[1] < seal.bounding_box[1][1]:
+            if x1 < self._END[0] < x2 and y1 < self._END[1] < y2:
                 self.winner = seal._name
-                return -1
+                return 1
 
             angle = -1
+            normalization_factor = max(self.board[y1: y2, x1: x2].shape) + .1
             # calculate the ammount of area (normalised) that is in contact with a wall or another seal
-            north = numpy.sum(self.board[seal.bounding_box[0][1] - 1, seal.bounding_box[0][0]: seal.bounding_box[1][0]]) / (2*max(self.board[seal.bounding_box[0][1] - 1, seal.bounding_box[0][0]: seal.bounding_box[1][0]].shape) + 1) # +1 to avoid by 0 divisions
-            sud   = numpy.sum(self.board[seal.bounding_box[1][1] + 1, seal.bounding_box[0][0]: seal.bounding_box[1][0]]) / (2*max(self.board[seal.bounding_box[1][1] + 1, seal.bounding_box[0][0]: seal.bounding_box[1][0]].shape) + 1)
-            est   = numpy.sum(self.board[seal.bounding_box[0][1]: seal.bounding_box[1][1], seal.bounding_box[1][0] + 1]) / (2*max(self.board[seal.bounding_box[0][1]: seal.bounding_box[1][1], seal.bounding_box[1][0] + 1].shape) + 1)
-            west  = numpy.sum(self.board[seal.bounding_box[0][1]: seal.bounding_box[1][1], seal.bounding_box[0][0] - 1]) / (2*max(self.board[seal.bounding_box[0][1]: seal.bounding_box[1][1], seal.bounding_box[0][0] - 1].shape) + 1)
+            north = numpy.sum(self.board[y1 - 1, x1: x2]) / normalization_factor # +1 to avoid divisions by 0
+            sud   = numpy.sum(self.board[y2 + 1, x1: x2]) / normalization_factor
+            est   = numpy.sum(self.board[y1: y2, x2 + 1]) / normalization_factor
+            west  = numpy.sum(self.board[y1: y2, x1 - 1]) / normalization_factor
 
-            # the bouncing is only in the 4 cardinal direction we ignore north-est, ecc directions
+            # the bouncing is only in the 4 cardinal direction we ignore the in betweens
             # the seal will bounce of the direction that sees the most contact with a foreign object
             max_dir = max(north, sud, est, west)
             max_dir = max_dir if max_dir > 0 else -1
 
-            if north == max_dir: angle = numpy.deg2rad(random.randint(30, 210)) # the angle is technically switched with sud's one but it was doing the opposite so idk
-            elif sud == max_dir: angle = numpy.deg2rad(random.randint(210, 335))
-            elif est == max_dir: angle = numpy.deg2rad(random.randint(120, 245))
+            if north  == max_dir: angle = numpy.deg2rad(random.randint(30, 150)) # the angle is technically switched with sud's one but it was doing the opposite so idk
+            elif sud  == max_dir: angle = numpy.deg2rad(random.randint(150, 335))
+            elif est  == max_dir: angle = numpy.deg2rad(random.randint(120, 245))
             elif west == max_dir: angle = numpy.deg2rad(180 - random.randint(120, 245))
-            
+
             if angle != -1: self.hit_wall = True
 
             seal.change_direction(angle)
@@ -194,10 +203,9 @@ class GAME:
         ## end seals update
         ## start seals drawing
 
-        for seal in self._seals: frame = overlay_images(frame, seal._sprite, (seal.x, seal.y))
+        for seal in self._seals: frame = overlay_images(frame, seal._sprite, seal.bounding_box)
 
         ## end seals drawing
-
 
         return frame
 
@@ -212,6 +220,7 @@ class RECORDER:
         self.hits = []   # store frame on wich a seal hits a wall
         self.fps = 30
         self.intro_seconds = 5
+        self.n = 0
 
     def __display_frame(self, frame, frame_rate) -> None:
         if not self.display: return
@@ -223,7 +232,6 @@ class RECORDER:
         starting_frame = self.game.render_next_frame()
         # generete first frame to use as base
         number_of_frames = self.fps*self.intro_seconds
-        self.n = 0
         for self.n in range(0, number_of_frames):
             # x position of the bounching screen (20 to offset for the negative distance in the rectagle drawing)
             x = round(20 + self.game.size[0] * self.n / number_of_frames)
@@ -246,11 +254,11 @@ class RECORDER:
 
             self.__display_frame(frame, 1000//30)
 
-    def GameScreen(self) -> None:
+    def GameScreen(self, ending=True) -> None:
         while True:
             frame = self.game.render_next_frame()
             if type(frame) == int:
-                self.EndScreen()
+                if ending: self.EndScreen()
                 break
             else:
                 self.game_frames.append(frame.copy()[:,:,:3])
@@ -259,7 +267,7 @@ class RECORDER:
                     self.game.hit_wall = False
                 self.n += 1
                 # live view 3x speed
-                self.__display_frame(frame, 1000//120)
+                self.__display_frame(frame, 1)  #1000//12
 
     def EndScreen(self) -> None:
         # pre compute static parts of the ending screen to speed up the calculation of the frame
@@ -296,11 +304,13 @@ class RECORDER:
             names.append("".join([chr((ord('a')+i % 26 if not _ else ord('`')+_)) for _ in range(i // 26, -1, -1)]))    # generate letters from numbers: 1->a, 26->z, 27->aa, ecc
             command += f"[1]adelay={round((h/self.fps)*1000)}[{names[-1]}];"
 
-        command += "[" + "][".join(names) + f']amix={len(names)}" {sys.path[0]}/audio.wav'
+        command += "[" + "][".join(names) + f']amix={len(names)}" {sys.path[0]}/audio_low.wav'
 
         print("[DEBUG] running ffmpeg command")
         os.system(command)
-        os.remove(f"{sys.path[0]}/base.wav")    # remove background sound
+        os.system(f'ffmpeg -hide_banner -loglevel error -i {sys.path[0]}/audio_low.wav -filter:a "volume=15dB" {sys.path[0]}/audio.wav')    # amplify audio because ffmpeg reduce the volume to a fix hight
+        os.remove(f"{sys.path[0]}/base.wav")        # remove background sound
+        os.remove(f"{sys.path[0]}/audio_low.wav")   # remove low volume audio 
 
         print("[DEBUG] creating video")
         # save frames to video called game.mp44 with mp4v codec
@@ -324,13 +334,33 @@ class RECORDER:
 
 if __name__ == "__main__":
     board_number = sys.argv[1] if len(sys.argv) > 1 else input("Board number: ")
-    while True:
-        print("RUNNING")
-        rec = RECORDER(board_number, display=False)
-        rec.StartingScreen()
-        rec.GameScreen()
-        print("game winner", rec.game.winner)
-        if rec.game.winner == "NIK":
-            rec.SaveRecording()
-            break
+    mode = "n" if len(sys.argv) < 3 else sys.argv[2]
+    rec = RECORDER(board_number)
+    # modes:
+    #   n: normal
+    #   b: bulk (used to stress stest the physics engine)
+    #   w: winner (search for a designated winner)
+    match mode:
+        case "n": rec.PLAY()
+        case "b": 
+            for _ in range(0, 100):
+                try:
+                    rec.display = False
+                    rec.GameScreen(ending=False)
+                except KeyboardInterrupt: pass  # stop current simulation
+                except ValueError:  # the engine failed and a sprite was drawm outside the boundires
+                    cv2.imshow("a", rec.game_frames[-1])    # show last frame to visualy assess problem
+                    cv2.waitKey()
+        case "w":
+            if len(sys.argv) < 4: raise TypeError("w mode require the name of the winner to be searched")
+            winner = sys.argv[3]
+            while True:
+                print("[DEBUG] RUNNING")
+                rec.display = False
+                rec.StartingScreen()
+                rec.GameScreen()
+                print("[DEBUG] game winner", rec.game.winner)
+                if rec.game.winner == winner:   # repete until designated winner is found
+                    rec.SaveRecording()
+                    break
     
