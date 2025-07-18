@@ -14,6 +14,11 @@ def overlay_images(bg:numpy.ndarray, img:numpy.ndarray, vertexes:tuple[tuple[int
         x1, x2 = vertexes[0] - img.shape[1]//2, vertexes[0] + img.shape[1]//2
     else: x1, y1, x2, y2 = vertexes[0][0], vertexes[0][1], vertexes[1][0], vertexes[1][1]
 
+    if x2 - x1 > img.shape[1]: x2 += 1
+    if x2 - x1 < img.shape[1]: x1 -= 1
+    if y2 - y1 > img.shape[0]: y2 += 1
+    if y2 - y1 < img.shape[0]: y1 -= 1
+    
     alpha_s = img[:, :, 3] / 255.0    # get alhpa channel
     alpha_l = 1.0 - alpha_s
 
@@ -64,6 +69,8 @@ class GAME:
         self._sprites["winning"] = {_.split(".")[0]: cv2.imread(f"{sys.path[0]}/Sprites/Winner/" + _, cv2.IMREAD_UNCHANGED) for _ in os.listdir(f"{sys.path[0]}/Sprites/Winner/")}
 
         self.hit_wall = False   # used to store frame on which seal hits the walls
+
+        self.magnitude = 10 # seal velocity
 
         self.size = (800, 800)   # x, y : w, h
         self._SPAWING_AREA = [60, 60]
@@ -133,9 +140,8 @@ class GAME:
 
                 if numpy.sum(self.board[rand_y - y : rand_y + y, rand_x -  x: rand_x + x]) == 0: break
             print("[DEBUG] spawned " + _)
-            module = 5  # seal velocity
             angle = numpy.deg2rad(random.randint(0, 365))   # pull a random starting angle
-            self._seals.append(SEAL(self._sprites["gaming"][_], rand_x, rand_y, module, angle, _, self.size))
+            self._seals.append(SEAL(self._sprites["gaming"][_], rand_x, rand_y, self.magnitude, angle, _, self.size))
             self.board[self._seals[-1].bounding_box[0][1] : self._seals[-1].bounding_box[1][1], self._seals[-1].bounding_box[0][0] : self._seals[-1].bounding_box[1][0]] = 2    # fill the area covered by the seal with 2s
 
     def render_next_frame(self) -> numpy.ndarray:
@@ -272,8 +278,8 @@ class RECORDER:
     def EndScreen(self) -> None:
         # pre compute static parts of the ending screen to speed up the calculation of the frame
         frame = self.game._background
-        frame = cv2.putText(frame, self.game.winner, (400,250), cv2.FONT_HERSHEY_COMPLEX, 1, (0,0,0), 4)
-        frame = overlay_images(frame, self.game._sprites["winning"][self.game.winner], (400, 350))
+        frame = cv2.putText(frame, self.game.winner, (self.game.size[0] // 2,250), cv2.FONT_HERSHEY_COMPLEX, 1, (0,0,0), 4)
+        frame = overlay_images(frame, self.game._sprites["winning"][self.game.winner], (self.game.size[0] // 2, 400))
         # credits
         frame = cv2.putText(frame, "board by @" + self.game._author, (0, self.game.size[1]-70), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
         frame = cv2.putText(frame, "game by @behavingbeaver", (0, self.game.size[1]-45), cv2.FONT_ITALIC, 0.5, (0,0,0), 1)
@@ -282,7 +288,7 @@ class RECORDER:
         # make the text THE WINNER IS rainbow color it: times the rainbow is runned throw, c: color of the rainbow
         for it in range(0, 5):
             for c in range (0, 30):
-                frame = cv2.putText(frame, "THE WINNER IS", (300,200), cv2.FONT_HERSHEY_COMPLEX, 1, numpy.array(colorsys.hsv_to_rgb(c / 30, 1, 1)[::-1]) * 255, 4)
+                frame = cv2.putText(frame, "THE WINNER IS", (self.game.size[0] // 2 - 100,200), cv2.FONT_HERSHEY_COMPLEX, 1, numpy.array(colorsys.hsv_to_rgb(c / 30, 1, 1)[::-1]) * 255, 4)
                 self.game_frames.append(frame.copy()[:,:,:3])
                 self.__display_frame(frame, 1000//30)
                 self.n += 1
